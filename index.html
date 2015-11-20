@@ -1,42 +1,205 @@
 <!DOCTYPE html>
 <html>
-<div>Pi is: <span id="pi"></span></div>
-<div>After: <span id="runs"></span> runs</div>
-<div>Runtime: <span id="time"></span> seconds</div>
-<script>
-window.onload = function() {
-    var pi_elem = document.getElementById('pi')
-      , runs_elem = document.getElementById('runs')
-      , time_elem = document.getElementById('time');
+    <head>
+        <meta charset="utf-8">
+        <style>
+            html, body {
+                background: #FFF;
+                margin: 0;
+            }
+            #canvas {
+                position: fixed;
+                background: #FFF
+            }
+            #stats {
+                position: absolute;
+                bottom: 10px;
+                right: 10px;
+                z-index: 10;
+                width: 400px;
+                height: 2em;
+                vertical-align: middle;
+                line-height: 2em;
+                margin: 0px 10px;
+                font-family: helvetica, serif;
+                font-size: 14px;
+                text-align: center;
+                opacity: 0.4;
+                color: white;
+                background-color: black;
+            }
+            #stats:hover {
+                opacity: 1;
+            }
+            #controls {
+                position: absolute;
+                right: 10px;
+                top: 5px;
+                cursor: pointer;
+            }
+        </style>
+    </head>
+    <canvas id="canvas"></canvas>
+    <div id="stats"><span id="info"></span><button id="controls">&#10073;&#10073;</button></div>
+    <script src="./bitset.js"></script>
 
+    <script>
+    Number.prototype.prettyString = function() {
+        return (((this / 1e3) | 0) * 1e3).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    }
 
-    var radius = Math.pow(2, 16)
-      , r_sqrd = Math.pow(radius, 2)
-      , cycles = 1e10
-      , numbers = 0
-      , inside = 0
-      , start = new Date();
+    window.onload = function() {
+        //Math.random = crypto_random;
+        // A place to show some statisitics
+        var stats = document.getElementById('info')
+          , ctrl = document.getElementById('controls');
 
-    var estimate_pi = function estimate_pi() {
-        return (4 * inside) / numbers;
-    };
+        ctrl.style.display = 'none';
+        /*
+        var generation_paused = false;
 
-    (function sample() {
-        for (var i = 0; i < 1e7 && numbers < cycles; i++, numbers++) {
-            var x = (Math.random() * radius) | 0
-              , y = (Math.random() * radius) | 0;
-
-            if ((Math.pow(x, 2) + Math.pow(y, 2)) < r_sqrd) {
-                inside += 1;
+        ctrl.onclick = function() {
+            generation_paused = !generation_paused;
+            if (generation_paused) {
+                ctrl.innerHTML = '&#9658;';
+            } else {
+                ctrl.innerHTML = '&#10073;&#10073;';
             }
         }
-        pi_elem.innerHTML = estimate_pi();
-        runs_elem.innerHTML = numbers;
-        time_elem.innerHTML = ((new Date() - start) / 1000).toString();
-        if (numbers < cycles) {
-            setTimeout(sample, 0);
+        */
+
+        // The canvas element
+        var canvas = document.getElementById('canvas')
+          , ctx = canvas.getContext('2d');
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
         }
-    })();
-}
-</script>
+        resize();
+        window.onresize = resize;
+
+        // The number of segments we're cutting our [0,1)^2 hypercube into.
+        var segments = Math.pow(2, 15);
+
+        // Record of the number of collisions that have occurred at each hypercube % 2.
+        var collisions = new BitSet(segments * segments);
+
+        // How many random numbers, and how many points we've generated so far.
+        var numbers = 0
+          , points = 0;
+
+        // The current time, when we're starting generation (used to generate some stats).
+        var gen_start = new Date().getTime();
+
+        // Some parameters on how much time to spend generating random numbers and how
+        // often to check our time usage. We set these by sampling the speed of our 
+        // animation over time, but these are static starting values.
+        var gen_time_slice = 5
+          , gen_check_period = 1000;
+
+        // Some stats to help adjust parameters and whatnot.
+        var target_hz = 10
+          , frame_interval_ms = Math.floor(1000/target_hz)
+          , date_checks = 0
+          , frames = 0
+          , time_per_frame = 0
+          , blocks = 0
+          , time_per_block = 0
+          , total_pixels = 0
+          , black_pixels = 0;
+
+        function noise(ctx) {
+            // Re-draw our viewport of the collisions, with a black pixel designating an odd
+            // number of collisions and a white pixel designating an even number (or 0).
+            var start = new Date().getTime();
+
+            var w = ctx.canvas.width
+              , h = ctx.canvas.height;
+
+            var data = ctx.createImageData(w, h)
+              , buf = new Uint32Array(data.data.buffer);
+
+            black_pixels = 0;
+            total_pixels = 0;
+            for (var c = 0; c < w; c++) {
+                for (var r = 0; r < h; r++) {
+                    var c_p = (r * segments) + c    // The collision position in the collisions data structure
+                      , b_p = (r * w) + c;          // The pixel position in the image buffer
+
+                    if (collisions.get(c_p)) {
+                        buf[b_p] = 0xff000000;
+                        black_pixels += 1;
+                    }
+                    total_pixels += 1;
+                }
+            }
+            ctx.putImageData(data, 0, 0);
+            frames += 1;
+            time_per_frame = (0.9 * time_per_frame) + (0.1 * (new Date().getTime() - start));
+        }
+
+        (function generate_collisions() {
+            // Generate a bit more random noise. We'll do as much as we can in some fixed
+            // time period. Refresh rate is 60FPS so we only have ~16ms between frames. We'll
+            // try to keep this function from blocking for more than a subset of that time. We
+            // don't want to waste too much time futzing with Date objects either, so we only
+            // check how much time we've spent working periodically.
+            var start = new Date().getTime()
+              , checks = 0;
+            while ((new Date().getTime() - start) <= gen_time_slice) {
+                checks += 1;
+                for (var i = gen_check_period; i > 0; --i) {
+                    var x = Math.floor(Math.random() * segments)
+                      , y = Math.floor(Math.random() * segments)
+                      , p = (x * segments) + y;
+
+                    collisions.flip(p);
+                    numbers += 2;
+                    points += 1;
+                }
+            }
+            date_checks = (0.9 * date_checks) + (0.1 * checks);
+            blocks += 1;
+            time_per_block = (0.9 * time_per_block) + (0.1 * (new Date().getTime() - start));
+            
+            setTimeout(generate_collisions, 0);
+        })();
+
+        var update_stats = function update_stats() {
+            var secs = (new Date().getTime() - gen_start) / 1000
+              , rate = points / secs;
+            stats.innerHTML = points.prettyString() + ' points (' + rate.prettyString() + '/s). ' + (100*black_pixels/total_pixels).toPrecision(5) + '% black.';
+            
+            console.log('Stats at: ' + new Date().toString());
+            console.log('  ' + date_checks + ' date checks.');
+            console.log('  ' + frames + ' frames (' + (frames / secs) + '/s).');
+            console.log('  ' + time_per_frame + 'ms / frame');
+            console.log('  ' + blocks + ' blocks (' + (blocks / secs) + '/s).');
+            console.log('  ' + time_per_block + 'ms / block');
+
+            // Update how many numbers per refresh we generate and how often we check up on
+            // the amount of time we've spent generating. The goal is to pause our random
+            // number generation at about 4x the framerate (to make sure we don't block too
+            // long) and to check how much time we've spent generating about twice per block
+            // of RNGs generated (so we've got good bounds on expected time spent generating,
+            // but we're not wasting too much time looking at the clock).
+
+            gen_time_slice = ((frame_interval_ms - time_per_frame) / 4) | 0;
+            gen_check_period = Math.max(((gen_check_period * (date_checks / 2)) | 0), 2);
+            console.log('  New time slice: ' + gen_time_slice);
+            console.log('  New check period: ' + gen_check_period);
+        }
+        setInterval(update_stats, 1000);
+
+        (function loop() {
+            var start = new Date().getTime();
+            noise(ctx);
+            var next = Math.max(0, frame_interval_ms - (new Date().getTime() - start))
+            setTimeout(loop, next);
+        })();
+    }
+    </script>
 </html>
