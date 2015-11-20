@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<div>Pi is: <span id="pi"></span></div>
+<div>After: <span id="runs"></span> runs</div>
+<div>Runtime: <span id="time"></span> seconds</div>
+<script>
+window.onload = function() {
+    var pi_elem = document.getElementById('pi')
+      , runs_elem = document.getElementById('runs')
+      , time_elem = document.getElementById('time');
+
+
+    var radius = Math.pow(2, 16)
+      , r_sqrd = Math.pow(radius, 2)
+      , cycles = 1e10
+      , numbers = 0
+      , inside = 0
+      , start = new Date();
+
+    var estimate_pi = function estimate_pi() {
+        return (4 * inside) / numbers;
+    };
+
+    (function sample() {
+        for (var i = 0; i < 1e7 && numbers < cycles; i++, numbers++) {
+            var x = (Math.random() * radius) | 0
+              , y = (Math.random() * radius) | 0;
+
+            if ((Math.pow(x, 2) + Math.pow(y, 2)) < r_sqrd) {
+                inside += 1;
+            }
+        }
+        pi_elem.innerHTML = estimate_pi();
+        runs_elem.innerHTML = numbers;
+        time_elem.innerHTML = ((new Date() - start) / 1000).toString();
+        if (numbers < cycles) {
+            setTimeout(sample, 0);
+        }
+    })();
+}
+</script>
+</html>
